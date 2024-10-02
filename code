@@ -1,0 +1,196 @@
+#include <LiquidCrystal.h>
+#include <SoftwareSerial.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+// LCD and RFID setup
+const int rs = 2, en = 3, d4 = 4, d5 = 5, d6 = 6, d7 = 7;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+SoftwareSerial ser(A0, A1);
+MFRC522 mfrc522(10, 9); // MFRC522 (SS_PIN, RST_PIN)
+
+// Pin assignments
+int bt = A4;
+int ir = A5;
+int buz = A3;
+
+// Variables for product and total calculations
+int pr1 = 0, pr2 = 0, pr3 = 0, pr4 = 0;
+int tot = 0, cnt = 0;
+
+// RFID tags
+String tagUID = "5B 16 1E 85";
+String tagUID1 = "84 87 1D 85";
+String tagUID2 = "1E C4 1D 85";
+String tagUID3 = "17 51 1D 85";
+String tagUID4 = "29 46 1E 85";
+
+// Mode flags
+boolean RFIDMode = true;
+boolean NormalMode = true;
+
+void setup() {
+    ser.begin(115200);
+    Serial.begin(9600);
+    
+    pinMode(bt, INPUT_PULLUP);
+    pinMode(ir, OUTPUT);
+    pinMode(buz, OUTPUT);
+    
+    digitalWrite(ir, HIGH);
+    digitalWrite(buz, LOW);
+    
+    lcd.begin(16, 2);
+    lcd.print("WELCOME!");
+    delay(2000);
+    
+    lcd.clear();
+    lcd.print("WIFI INITIALIZING...");
+    wifi_init();
+    
+    Serial.println("WELCOME");
+    SPI.begin();
+    mfrc522.PCD_Init();
+}
+
+void loop() {
+    lcd.clear();
+    lcd.print("Pls drop product..");
+    lcd.setCursor(0, 1);
+    lcd.print("TOT: CT:");
+    lcd.setCursor(4, 1);
+    displayValue(tot);
+    lcd.setCursor(12, 1);
+    displayValue(cnt);
+
+    delay(100);
+    
+    if (NormalMode) {
+        if (RFIDMode) {
+            if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) {
+                return;
+            }
+
+            String tag = readTag();
+            checkTag(tag);
+        }
+    }
+}
+
+String readTag() {
+    String tag = "";
+    for (byte j = 0; j < mfrc522.uid.size; j++) {
+        tag.concat(String(mfrc522.uid.uidByte[j] < 0x10 ? " 0" : " "));
+        tag.concat(String(mfrc522.uid.uidByte[j], HEX));
+    }
+    tag.toUpperCase();
+    return tag;
+}
+
+void checkTag(String tag) {
+    if (tag.substring(1) == tagUID) {
+        processProduct(25, pr1);
+    } else if (tag.substring(1) == tagUID1) {
+        processProduct(20, pr2);
+    } else if (tag.substring(1) == tagUID2) {
+        processProduct(15, pr3);
+    } else if (tag.substring(1) == tagUID4) {
+        processProduct(10, pr4);
+    } else if (tag.substring(1) == tagUID3) {
+        completeTransaction();
+    }
+}
+
+void processProduct(int price, int &pr) {
+    pr++;
+    lcd.setCursor(0, 0);
+    lcd.print("Product of Rs-" + String(price));
+    if (pr % 2 == 1) {
+        tot += price;
+        cnt++;
+    } else {
+        tot -= price;
+        cnt--;
+    }
+    delay(2000);
+}
+
+void completeTransaction() {
+    Serial.println(bt);
+    lcd.clear();
+    lcd.print("THANK U 4 Shopping");
+    lcd.setCursor(0, 1);
+    lcd.print("TOT: CT:");
+    lcd.setCursor(4, 1);
+    displayValue(tot);
+    lcd.setCursor(12, 1);
+    displayValue(cnt);
+
+    do {
+        upload_iot(cnt, tot);
+        delay(10000);
+        Serial.print("reading");
+        delay(5000);
+        int rcv = read_iot();
+        if (rcv == '1') {
+            lcd.setCursor(0, 1);
+            lcd.print("PAYED SUCCESSFULLY");
+            delay(1000);
+            lcd.setCursor(0, 1);
+            lcd.print(" ");
+            digitalWrite(ir, LOW);
+        }
+    } while (true);
+}
+
+void wifi_init() {
+    ser.println("AT+RST");
+    delay(2000);
+    ser.println("AT+CWMODE=1");
+    delay(1000);
+    ser.print("AT+CWJAP=\"project\",\"12345678\"");
+    ser.println();
+    delay(1000);
+}
+
+void upload_iot(int x, int y) {
+    String cmd = "AT+CIPSTART=\"TCP\",\"184.106.153.149\",80";
+    ser.println(cmd);
+    delay(1500);
+
+    String getStr = "GET /update?api_key=EEDM0PETOHNP2M33&field1=" + String(x) + "&field2=" + String(y) + "\r\n\r\n";
+    cmd = "AT+CIPSEND=" + String(getStr.length());
+    ser.println(cmd);
+    delay(1500);
+
+    ser.println(getStr);
+    delay(1500);
+}
+
+int read_iot() {
+    String cmd = "AT+CIPSTART=\"TCP\",\"184.106.153.149\",80";
+    ser.println(cmd);
+    delay(1500);
+
+    String getStr = "GET /channels/448658/fields/1/last?api_key=87Q15B21ACXXUHBC\r\n\r\n";
+    cmd = "AT+CIPSEND=" + String(getStr.length());
+    ser.println(cmd);
+    delay(1500);
+
+    ser.print(getStr);
+    delay(200);
+
+    if (ser.find("~")) {
+        delay(10);
+        return ser.read();
+    }
+    return 0;
+}
+
+void displayValue(int value) {
+    lcd.write(value / 1000 + 48);
+    lcd.write((value / 100) % 10 + 48);
+    lcd.write((value / 10) % 10 + 48);
+    lcd.write((value % 10) + 48);
+}
